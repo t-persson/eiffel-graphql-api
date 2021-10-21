@@ -16,6 +16,7 @@
 """Base schemas and schema generation."""
 import json
 import os
+import bson
 
 import graphene
 from graphene import relay
@@ -31,7 +32,9 @@ class EiffelConnectionField(relay.ConnectionField):
         """Initialize schema fields."""
         field = "eiffel_graphql_api.graphql.schemas.events.{}".format(field)
         # pylint:disable=super-with-arguments
-        super(EiffelConnectionField, self).__init__(field, search=graphene.String())
+        super(EiffelConnectionField, self).__init__(
+            field, regex=graphene.String(), search=graphene.String()
+        )
 
 
 class BaseQuery(graphene.ObjectType):
@@ -52,18 +55,38 @@ class BaseQuery(graphene.ObjectType):
         return json.loads(query.replace("'", '"'))
 
     @classmethod
+    def _regex(cls, collection, regex):
+        """Run an optimized regular expression on a MongoDB collection.
+
+        :param collection: Name of collection in MongoDB.
+        :type collection: str
+        :param regex: Regular expressions to compile and run.
+        :type regex: dict
+        :return: pymongo cursor
+        :rtype: :obj:`pymongo.collection.Cursor`
+        """
+        query = {}
+        for key, value in regex.items():
+            query[key] = bson.regex.Regex(value)
+        return get_database()[collection].find(query)
+
+    @classmethod
     def generic_resolve(
-        cls, parent, info, last=None, first=None, search=None, **_
+        cls, parent, info, last=None, first=None, regex=None, search=None, **_
     ):  # pylint:disable=too-many-arguments, unused-argument
         """Generically resolve a meta node for each eiffel object type."""
         # pylint:disable=protected-access
         obj = info.return_type.graphene_type._meta.node
         collection = "Eiffel{}Event".format(obj)
 
-        search = "{}" if search is None else search
-        search = cls._clean_query(search)
+        if regex is not None:
+            regex = cls._clean_query(regex)
+            query = cls._regex(collection, regex)
+        else:
+            search = "{}" if search is None else search
+            search = cls._clean_query(search)
+            query = get_database()[collection].find(search)
 
-        query = get_database()[collection].find(search)
         if last:
             query.limit(last)
             query.sort([("meta.time", -1)])
